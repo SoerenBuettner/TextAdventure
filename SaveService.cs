@@ -1,40 +1,41 @@
-﻿using System.Text.Json;
-using TextAbenteuer.Models;
+﻿using System.IO;
+using System.Text.Json;
 
-namespace TextAbenteuer.Services
+namespace SchradinsAdventure
 {
-    /// <summary>
-    /// Speichert und lädt Spielstände als JSON.
-    /// </summary>
-    public class SaveService
+    internal class SaveService
     {
-        public bool Save(string path, Player player, World world, string difficulty)
+        public static string DefaultPath => "save.json";
+
+        public static void Save(Player p, World w)
         {
-            try
-            {
-                var dto = new SaveData { Player = player, World = world, Difficulty = difficulty };
-                var json = JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(path, json);
-                return true;
-            }
-            catch { return false; }
+            var data = w.ToSave(p); // World.ToSave existiert jetzt
+            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(DefaultPath, json);
         }
 
-        public SaveData? Load(string path)
+        public static SaveData Load()
         {
-            try
-            {
-                var json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<SaveData>(json);
-            }
-            catch { return null; }
+            var json = File.ReadAllText(DefaultPath);
+            return JsonSerializer.Deserialize<SaveData>(json)!;
         }
     }
 
-    public class SaveData
+    internal sealed class SaveData
     {
-        public Player Player { get; set; } = default!;
-        public World World { get; set; } = default!;
-        public string Difficulty { get; set; } = "mittel";
+        public int Seed { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public SavePlayer? Player { get; set; }
+    }
+
+    internal sealed class SavePlayer
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int HP { get; set; }
+        public int MaxHP { get; set; }
+        public int XP { get; set; }
+        public int Level { get; set; }
     }
 }

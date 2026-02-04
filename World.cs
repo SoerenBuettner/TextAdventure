@@ -1,160 +1,162 @@
-﻿using System.Text;
+﻿using System;
 
-namespace TextAbenteuer.Models
+namespace SchradinsAdventure
 {
-    /// <summary>
-    /// Weltkarte als Dungeon (Räume & Korridore) mit Fog-of-War.
-    /// Tiles: '.' Boden, '#' Wand, 'R' Runenstein, 'B' Boss.
-    /// </summary>
-    public class World
+    internal static class Tiles
+    {
+        public const char Wall = '#';
+        public const char Floor = '.';
+        public const char Player = '@';
+        public const char DoorClosed = '+';
+        public const char DoorOpen = '/';
+        public const char Boss = 'B';
+        public const char KeyMonster = 'M';
+    }
+
+    internal enum Cell : byte { Wall = 0, Floor = 1 }
+
+    internal sealed partial class World
     {
         public int Width { get; }
         public int Height { get; }
         public int Seed { get; }
-        public Position Start { get; private set; }
-        public Position Boss { get; private set; }
+        private readonly Cell[,] _cells;
+        private readonly Random _rng;
 
-        private readonly bool[,] _explored;
-        private readonly char[,] _tiles;
+        // Spezielle Orte
+        public (int x, int y) BossPos { get; private set; }
+        public (int x, int y) DoorPos { get; private set; }
+        public (int x, int y) KeyMonsterPos { get; private set; }
+        public bool DoorIsOpen { get; private set; }
 
-        public World(int width, int height, int seed, Random rng, int minRunen, int maxRunen)
+        public World(int w, int h, int seed)
         {
-            Width = width;
-            Height = height;
-            Seed = seed;
-            _explored = new bool[width, height];
-            _tiles = new char[width, height];
-
-            // Alles zunächst Wand
-            for (int y = 0; y < height; y++)
-                for (int x = 0; x < width; x++)
-                    _tiles[x, y] = '#';
-
-            // Einfache Rooms-&-Corridors-Generierung
-            int rooms = Math.Max(4, (width * height) / 32);
-            var centers = new List<Position>();
-
-            for (int i = 0; i < rooms; i++)
-            {
-                int rw = rng.Next(3, Math.Max(4, width / 4));
-                int rh = rng.Next(3, Math.Max(4, height / 4));
-                int rx = rng.Next(1, Math.Max(2, width - rw - 1));
-                int ry = rng.Next(1, Math.Max(2, height - rh - 1));
-
-                for (int y = ry; y < ry + rh; y++)
-                    for (int x = rx; x < rx + rw; x++)
-                        _tiles[x, y] = '.';
-
-                centers.Add(new Position(rx + rw / 2, ry + rh / 2));
-            }
-
-            // Räume verbinden (L-förmig)
-            centers.Sort((a, b) => (a.X + a.Y).CompareTo(b.X + b.Y));
-            for (int i = 1; i < centers.Count; i++) CarveCorridor(centers[i - 1], centers[i]);
-
-            // Start & Boss
-            Start = centers.Count > 0 ? centers[0] : new Position(1, 1);
-            _tiles[Start.X, Start.Y] = '.';
-
-            Boss = FarthestWalkableFrom(Start);
-            _tiles[Boss.X, Boss.Y] = 'B';
-
-            // Runensteine verteilen
-            int runen = new Random(Seed).Next(minRunen, maxRunen + 1); // deterministisch aus Seed
-            PlaceRunestones(new Random(Seed + 1), runen, new HashSet<(int, int)> { (Start.X, Start.Y), (Boss.X, Boss.Y) });
+            Width = w; Height = h; Seed = seed;
+            _cells = new Cell[w, h];
+            _rng = new Random(seed);
         }
 
-        private void CarveCorridor(Position a, Position b)
+        public void Generate()
         {
-            int x = a.X, y = a.Y;
-            while (x != b.X) { _tiles[x, y] = '.'; x += (b.X > x) ? 1 : -1; }
-            while (y != b.Y) { _tiles[x, y] = '.'; y += (b.Y > y) ? 1 : -1; }
-            _tiles[b.X, b.Y] = '.';
-        }
-
-        private Position FarthestWalkableFrom(Position start)
-        {
-            var q = new Queue<Position>();
-            var dist = new Dictionary<(int, int), int>();
-            q.Enqueue(start);
-            dist[(start.X, start.Y)] = 0;
-            Position far = start;
-            int[] dx = { 1, -1, 0, 0 };
-            int[] dy = { 0, 0, 1, -1 };
-
-            while (q.Count > 0)
-            {
-                var p = q.Dequeue();
-                int d = dist[(p.X, p.Y)];
-                if (d > dist[(far.X, far.Y)]) far = p;
-                for (int i = 0; i < 4; i++)
-                {
-                    int nx = p.X + dx[i], ny = p.Y + dy[i];
-                    if (nx < 0 || ny < 0 || nx >= Width || ny >= Height) continue;
-                    if (_tiles[nx, ny] == '#') continue;
-                    var key = (nx, ny);
-                    if (!dist.ContainsKey(key)) { dist[key] = d + 1; q.Enqueue(new Position(nx, ny)); }
-                }
-            }
-            return far;
-        }
-
-        private void PlaceRunestones(Random rng, int count, HashSet<(int, int)> forbidden)
-        {
-            int placed = 0, attempts = 0;
-            while (placed < count && attempts < Width * Height * 2)
-            {
-                attempts++;
-                int x = rng.Next(0, Width), y = rng.Next(0, Height);
-                if (_tiles[x, y] != '.') continue;
-                if (forbidden.Contains((x, y))) continue;
-                _tiles[x, y] = 'R';
-                forbidden.Add((x, y));
-                placed++;
-            }
-        }
-
-        public void Reveal(Position p) => _explored[p.X, p.Y] = true;
-        public bool IsWalkable(Position p) => _tiles[p.X, p.Y] != '#';
-        public char GetTile(Position p) => _tiles[p.X, p.Y];
-        public bool IsRunenstein(Position p) => _tiles[p.X, p.Y] == 'R';
-        public bool IsBoss(Position p) => _tiles[p.X, p.Y] == 'B';
-
-        public string RenderAscii(Position playerPos)
-        {
-            var sb = new StringBuilder();
+            // 1) alles Wand
             for (int y = 0; y < Height; y++)
-            {
                 for (int x = 0; x < Width; x++)
+                    _cells[x, y] = Cell.Wall;
+
+            // 2) drunkard walk + Räume
+            int rx = Width / 2, ry = Height / 2;
+            int steps = Width * Height * 2;
+
+            for (int i = 0; i < steps; i++)
+            {
+                _cells[rx, ry] = Cell.Floor;
+
+                int dir = _rng.Next(4);
+                if (dir == 0) rx++;
+                else if (dir == 1) rx--;
+                else if (dir == 2) ry++;
+                else ry--;
+
+                rx = Math.Clamp(rx, 1, Width - 2);
+                ry = Math.Clamp(ry, 1, Height - 2);
+
+                if (_rng.NextDouble() < 0.10)
                 {
-                    if (playerPos.X == x && playerPos.Y == y) { sb.Append('S'); continue; }
-                    if (!_explored[x, y]) { sb.Append(' '); continue; }
-                    sb.Append(_tiles[x, y]);
+                    int rw = _rng.Next(3, 8);
+                    int rh = _rng.Next(3, 6);
+                    for (int yy = ry - rh / 2; yy <= ry + rh / 2; yy++)
+                        for (int xx = rx - rw / 2; xx <= rx + rw / 2; xx++)
+                            if (xx > 1 && yy > 1 && xx < Width - 2 && yy < Height - 2)
+                                _cells[xx, yy] = Cell.Floor;
                 }
-                sb.AppendLine();
             }
-            return sb.ToString();
+
+            // 3) Außenrahmen als Wand
+            for (int x = 0; x < Width; x++) { _cells[x, 0] = Cell.Wall; _cells[x, Height - 1] = Cell.Wall; }
+            for (int y = 0; y < Height; y++) { _cells[0, y] = Cell.Wall; _cells[Width - 1, y] = Cell.Wall; }
+
+            // 4) Bossraum unten rechts
+            int rw2 = 14, rh2 = 10;
+            int rx2 = Width - rw2 - 2;
+            int ry2 = Height - rh2 - 2;
+
+            for (int y = ry2; y < ry2 + rh2; y++)
+                for (int x = rx2; x < rx2 + rw2; x++)
+                    _cells[x, y] = Cell.Floor;
+
+            // Tür vor dem Bossraum (linke Wand mittig)
+            int doorY = ry2 + rh2 / 2;
+            int doorX = rx2 - 1;
+            DoorPos = (doorX, doorY);
+            DoorIsOpen = false;
+
+            // Boss im Raum zentriert
+            BossPos = (rx2 + rw2 / 2, ry2 + rh2 / 2);
+
+            // Schlüssel-Monster irgendwo außerhalb des Bossraums
+            KeyMonsterPos = FindRandomFloor(pos =>
+                !(pos.x >= rx2 - 1 && pos.x <= rx2 + rw2 && pos.y >= ry2 - 1 && pos.y <= ry2 + rh2));
+
+            // Korridor zur Tür freihalten
+            for (int x = doorX - 6; x <= doorX; x++)
+                _cells[Math.Clamp(x, 1, Width - 2), doorY] = Cell.Floor;
         }
 
-        public string RenderAsciiMini(Position playerPos, int radius)
+        private (int x, int y) FindRandomFloor(Func<(int x, int y), bool>? predicate = null)
         {
-            var sb = new StringBuilder();
-            int minY = Math.Max(0, playerPos.Y - radius);
-            int maxY = Math.Min(Height - 1, playerPos.Y + radius);
-            int minX = Math.Max(0, playerPos.X - radius);
-            int maxX = Math.Min(Width - 1, playerPos.X + radius);
-
-            for (int y = minY; y <= maxY; y++)
+            for (int i = 0; i < 10000; i++)
             {
-                for (int x = minX; x <= maxX; x++)
-                {
-                    if (playerPos.X == x && playerPos.Y == y) { sb.Append('S'); continue; }
-                    if (!_explored[x, y]) { sb.Append(' '); continue; }
-                    sb.Append(_tiles[x, y]);
-                }
-                sb.AppendLine();
+                int x = _rng.Next(1, Width - 1);
+                int y = _rng.Next(1, Height - 1);
+                if (_cells[x, y] == Cell.Floor && (predicate?.Invoke((x, y)) ?? true))
+                    return (x, y);
             }
-            return sb.ToString();
+            // Fallback
+            for (int y = 1; y < Height - 1; y++)
+                for (int x = 1; x < Width - 1; x++)
+                    if (_cells[x, y] == Cell.Floor) return (x, y);
+            return (1, 1);
+        }
+
+        public void OpenDoor() => DoorIsOpen = true;
+
+        public (int x, int y) GetSpawnPoint()
+        {
+            for (int r = 0; r < Math.Max(Width, Height) / 2; r++)
+            {
+                for (int y = Height / 2 - r; y <= Height / 2 + r; y++)
+                    for (int x = Width / 2 - r; x <= Width / 2 + r; x++)
+                    {
+                        if (x < 1 || y < 1 || x >= Width - 1 || y >= Height - 1) continue;
+                        if (_cells[x, y] == Cell.Floor) return (x, y);
+                    }
+            }
+            return (1, 1);
+        }
+
+        public bool IsWall(int x, int y)
+        {
+            if (!DoorIsOpen && (x, y) == DoorPos) return true;
+            return _cells[x, y] == Cell.Wall;
+        }
+
+        public bool IsWalkable(int x, int y) => !IsWall(x, y);
+
+        // ---------- Save/Load (neu) ----------
+        public SaveData ToSave(Player p) => new SaveData
+        {
+            Seed = Seed,
+            Width = Width,
+            Height = Height,
+            Player = p.ToSave()
+            // Tür/Boss/Monster werden beim Laden bewusst neu platziert (balancing-sicher)
+        };
+
+        public static World LoadFromSave(SaveData s)
+        {
+            var w = new World(s.Width, s.Height, s.Seed);
+            w.Generate(); // setzt Boss/Tür/Monster frisch
+            return w;
         }
     }
 }
